@@ -6,8 +6,6 @@ Class TSearchTree implements a trie (also called "digital tree" or "prefix tree"
 
 In SearchStrings folder you can find sample application that allows to compare performance of trie search and linear (sequential) search.
 
-![ss](https://user-images.githubusercontent.com/1144484/126173210-e078af9e-c879-4dcc-8f60-739da5b416da.png)
-
 ## Requirements
 
 Delphi 10.2 Tokyo or newer.
