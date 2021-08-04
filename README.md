@@ -2,7 +2,7 @@
 
 ## Description
 
-Class TSearchTree implements a trie (also called "digital tree" or "prefix tree", https://en.wikipedia.org/wiki/Trie).
+Class TSearchTree implements a trie (also called "digital tree" or "prefix tree", see: https://en.wikipedia.org/wiki/Trie).
 
 In SearchStrings folder you can find sample application that allows to compare performance of trie search and linear (sequential) search.
 
