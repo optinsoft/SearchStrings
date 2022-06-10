@@ -31,9 +31,16 @@
 { ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.                                   }
 {                                                                              }
 { Last edit by: Vitaly Yakovlev                                                }
-{ Date: July 19, 2021                                                          }
-{ Version: 1.1                                                                 }
+{ Date: June 09, 2022                                                          }
+{ Version: 1.2                                                                 }
 {                                                                              }
+{ v1.2:                                                                        }
+{  - Delphi 7 compatibility                                                    }
+{  - Grow Delta argument                                                       }
+{  - Shuffle, ShuffleRange                                                     }
+{  - AddRange, AddN                                                            }
+{  - AddFromString                                                             }
+{  - PInt                                                                      }
 { v1.1:                                                                        }
 {  - copyright                                                                 }
 { v1.0:                                                                        }
@@ -50,6 +57,10 @@ uses Classes, SysUtils;
 type
   TIntArray = array of Integer;
 
+{$IF CompilerVersion >= 25.0 } //Delphi XE4
+  {$LEGACYIFEND ON}
+{$IFEND}
+
 {$IF not Declared(TExchangeItemsEvent)}
   TExchangeItemsEvent = procedure (Index1, Index2: LongInt) of object;
 {$IFEND}
@@ -65,6 +76,7 @@ type
 
     function GetValue(Index: LongInt): Integer;
     procedure SetValue(Index: LongInt; Value: Integer);
+    function GetPInt(Index: LongInt): PInteger;
     procedure SetSorted(const Value: Boolean);
     procedure SetNoDuplicates(const Value: Boolean);
 
@@ -72,11 +84,12 @@ type
     procedure Error(const Msg: string; Data: Integer); overload;
     procedure Error(Msg: PResStringRec; Data: Integer); overload;
     procedure SetCapacity(NewCapacity: Integer);
-    procedure Grow;
+    procedure Grow(Delta: Integer = 0);
     procedure InsertItem(Index: LongInt; const Value: Integer);
     procedure QuickSort(L, R: LongInt); // L < R
     procedure QuickSortExchange(L, R: LongInt); // L < R
     procedure RemoveDuplicates; // FCount > 1
+    procedure ShuffleRange(L, R: LongInt);
 
   public
     constructor Create;
@@ -84,6 +97,8 @@ type
 
     function Add(const Value: Integer): LongInt;
     function AddSorted(const Value: Integer; Unique: Boolean): LongInt;
+    procedure AddRange(const LowValue, HighValue: Integer);
+    procedure AddN(const Value: Integer; N: Integer);
     procedure Exchange(Index1, Index2: LongInt);
     procedure Insert(Index: LongInt; const Value: Integer);
     procedure Delete(Index: LongInt);
@@ -92,6 +107,7 @@ type
     procedure Assign(lst: TIntList);
     procedure Sort;
     procedure SortRange(L, R: Integer);
+    procedure Shuffle;
     function Find(const Value: Integer): LongInt;
     function FindSorted(const Value: Integer): LongInt;
     procedure LoadFromFile(const FileName: String);
@@ -100,9 +116,11 @@ type
     procedure SaveToStream(Stream: TStream);
     procedure IncValue(Index: LongInt; N: Integer = 1);
     procedure DecValue(Index: LongInt; N: Integer = 1);
+    procedure AddFromString(const AStr: String);
 
     property Count: LongInt read FCount;
     property Value[Index: LongInt]: Integer read GetValue write SetValue; default;
+    property PInt[Index: LongInt]: PInteger read GetPInt;
     property Sorted: Boolean read FSorted write SetSorted;
     property NoDuplicates: Boolean read FNoDuplicates write SetNoDuplicates;
   end;
@@ -130,11 +148,39 @@ begin
   inherited Destroy;
 end;
 
+{$IFOPT O+}
+  // Turn off optimizations to force creating a EBP stack frame and
+  // place params on the stack.
+  {$DEFINE OPTIMIZATIONSON}
+  {$O-}
+{$ENDIF O+}
 procedure TIntList.Error(Msg: PResStringRec; Data: Integer);
+{$IFDEF VER150} //Delphi 7
+  function ReturnAddr: Pointer;
+  asm
+          MOV     EAX,[EBP+4]
+  end;
+{$ENDIF}
 begin
-  raise EIntListError.CreateFmt(LoadResString(Msg), [Data]) at
-    PPointer(PByte(@Msg) + SizeOf(Msg) + SizeOf(Self) + SizeOf(Pointer))^;
+  raise EIntListError.CreateFmt(LoadResString(Msg), [Data]) at {$IFDEF VER150}ReturnAddr;{$ELSE}
+    PPointer(PByte(@Msg) + SizeOf(Msg) + SizeOf(Self) + SizeOf(Pointer))^;{$ENDIF}
 end;
+
+procedure TIntList.Error(const Msg: string; Data: Integer);
+{$IFDEF VER150} //Delphi 7
+  function ReturnAddr: Pointer;
+  asm
+          MOV     EAX,[EBP+4]
+  end;
+{$ENDIF}
+begin
+  raise EIntListError.CreateFmt(Msg, [Data]) at {$IFDEF VER150}ReturnAddr;{$ELSE}
+    PPointer(PByte(@Msg) + SizeOf(Msg) + SizeOf(Self) + SizeOf(Pointer))^;{$ENDIF}
+end;
+{$IFDEF OPTIMIZATIONSON}
+  {$UNDEF OPTIMIZATIONSON}
+  {$O+}
+{$ENDIF OPTIMIZATIONSON}
 
 procedure TIntList.Exchange(Index1, Index2: Integer);
 var
@@ -200,10 +246,11 @@ begin
     Result := -1;
 end;
 
-procedure TIntList.Error(const Msg: string; Data: Integer);
+function TIntList.GetPInt(Index: LongInt): PInteger;
 begin
-  raise EIntListError.CreateFmt(Msg, [Data]) at
-    PPointer(PByte(@Msg) + SizeOf(Msg) + SizeOf(Self) + SizeOf(Pointer))^;
+  if (Index < 0) or (Index >= FCount) then
+    Error(@SListIndexError, Index);
+  Result := @FList[Index];
 end;
 
 function TIntList.GetValue(Index: LongInt): Integer;
@@ -214,12 +261,13 @@ begin
 end;
 
 procedure TIntList.Grow;
-var
-  Delta: Integer;
 begin
-  if FCapacity > 64 then Delta := FCapacity div 4 else
-    if FCapacity > 8 then Delta := 16 else
-      Delta := 4;
+  if Delta < 4 then
+  begin
+    if FCapacity > 64 then Delta := FCapacity div 4 else
+      if FCapacity > 8 then Delta := 16 else
+        Delta := 4;
+  end;
   SetCapacity(FCapacity + Delta);
 end;
 
@@ -273,6 +321,31 @@ begin
   if (Index < 0) or (Index >= FCount) then
     Error(@SListIndexError, Index);
   FList[Index] := Value;
+end;
+
+procedure TIntList.Shuffle;
+begin
+  FSorted := False;
+  if FCount > 1 then
+    ShuffleRange(0, FCount-1);
+end;
+
+procedure TIntList.ShuffleRange(L, R: LongInt);
+var
+  I, J: LongInt;
+  T: Integer;
+begin
+  //FSorted := False;
+  for I := L to R-1 do
+  begin
+    J := I + Random(R+1-I);
+    if J <> I then
+    begin
+      T := FList[I];
+      FList[I] := FList[J];
+      FList[J] := T;
+    end;
+  end;
 end;
 
 procedure TIntList.Sort;
@@ -478,6 +551,108 @@ begin
   SetCapacity(lst.FCapacity);
   if FCount > 0 then
     System.Move(lst.FList[0], FList[0], FCount * SizeOf(Integer));
+end;
+
+procedure TIntList.AddFromString(const AStr: String);
+var
+  I, N, CN, CN2, SLen: Integer;
+begin
+  SLen := Length(AStr);
+  I := 1;
+  while (I <= SLen) and (AStr[I] = ' ')
+    do Inc(I);
+  while I <= SLen do
+  begin
+    if AStr[I] = ',' then
+    begin
+      Inc(I);
+      Continue;
+    end;
+{$IF CompilerVersion >= 20.0 } // Delphi 2009 and above
+    if not CharInSet(AStr[I], ['1'..'9']) then Break;
+{$ELSE}
+    if not (AStr[I] in ['1'..'9']) then Break;
+{$IFEND}
+    CN := Ord(AStr[I])-Ord('0');
+    N := 1;
+{$IF CompilerVersion >= 20.0 } // Delphi 2009 and above
+    while (I+N <= SLen) and CharInSet(AStr[I+N], ['0'..'9']) do
+{$ELSE}
+    while (I+N <= SLen) and (AStr[I+N] in ['0'..'9']) do
+{$IFEND}
+    begin
+      CN := CN * 10 + (Ord(AStr[I+N])-Ord('0'));
+      Inc(N);
+    end;
+    Inc(I, N);
+    while (I <= SLen) and (AStr[I] = ' ')
+      do Inc(I);
+    if (I < SLen) and (AStr[I] = '-') then
+    begin
+      Inc(I);
+      while (I <= SLen) and (AStr[I] = ' ')
+        do Inc(I);
+{$IF CompilerVersion >= 20.0 } // Delphi 2009 and above
+      if (I > SLen) or not CharInSet(AStr[I], ['1'..'9']) then Break;
+{$ELSE}
+      if (I > SLen) or not (AStr[I] in ['1'..'9']) then Break;
+{$IFEND}
+      CN2 := Ord(AStr[I])-Ord('0');
+      N := 1;
+{$IF CompilerVersion >= 20.0 } // Delphi 2009 and above
+      while (I+N <= SLen) and CharInSet(AStr[I+N], ['0'..'9']) do
+{$ELSE}
+      while (I+N <= SLen) and (AStr[I+N] in ['0'..'9']) do
+{$IFEND}
+      begin
+        CN2 := CN2 * 10 + (Ord(AStr[I+N])-Ord('0'));
+        Inc(N);
+      end;
+      Inc(I, N);
+      while (I <= SLen) and (AStr[I] = ' ')
+        do Inc(I);
+      AddRange(CN, CN2);
+    end else
+      Add(CN);
+    if (I > SLen) or (AStr[I] <> ',') then Break;
+  end;
+end;
+
+procedure TIntList.AddN(const Value: Integer; N: Integer);
+var
+  I, Delta: Integer;
+begin
+  if N < 1 then Exit;
+  if FSorted then
+  begin
+    for I := 0 to N-1 do
+      AddSorted(Value, FNoDuplicates);
+    Exit;
+  end;
+  Delta := FCount + N - FCapacity;
+  if Delta > 0 then Grow(Delta);
+  for I := 0 to N-1 do
+    FList[FCount+I] := Value;
+  Inc(FCount, N);
+end;
+
+procedure TIntList.AddRange(const LowValue, HighValue: Integer);
+var
+  I, N, Delta: Integer;
+begin
+  if HighValue < LowValue then Exit;
+  if FSorted then
+  begin
+    for I := LowValue to HighValue do
+      AddSorted(I, FNoDuplicates);
+    Exit;
+  end;
+  N := HighValue + 1 - LowValue;
+  Delta := FCount + N - FCapacity;
+  if Delta > 0 then Grow(Delta);
+  for I := 0 to N-1 do
+    FList[FCount+I] := LowValue + I;
+  Inc(FCount, N);
 end;
 
 function TIntList.AddSorted(const Value: Integer; Unique: Boolean): LongInt;
